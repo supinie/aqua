@@ -5,10 +5,24 @@ const FLOOR_COLOUR: Color = Color::rgb(0.8, 0.8, 0.8);
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
+        .init_state::<AnguillaState>()
+        .init_state::<AnguillaDirection>()
         .add_event::<CollisionEvent>()
         .add_event::<ProjectileEvent>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (animate_sprite, update_animation, (movement_input, apply_velocity, check_for_collisions, spawn_projectile).chain()))
+        .add_systems(Update, (
+            animate_sprite, 
+            update_animation, (
+                movement_input, 
+                apply_velocity, 
+                check_for_collisions, 
+                spawn_projectile,
+                change_direction,
+            ).chain()
+        ))
+        .add_systems(OnEnter(AnguillaState::Run), animation_run)
+        .add_systems(OnEnter(AnguillaState::Jump), animation_jump)
+        .add_systems(OnEnter(AnguillaState::Neutral), animation_neutral)
         .run();
 }
 
@@ -21,33 +35,21 @@ struct AnimationIndices {
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
 
-struct AnimationType {
-    texture: &'static str,
-    atlas_layout: (Vec2, usize, usize, Option<Vec2>, Option<Vec2>),
-    animation_indices: AnimationIndices,
-    frame_rate: f32,
+
+#[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
+enum AnguillaState {
+    #[default]
+    Neutral,
+    Run,
+    Jump,
 }
 
-const ANGUILLA_NEUTRAL: AnimationType = AnimationType {
-    texture: "Anguilla/Anguilla_Neutral.png",
-    atlas_layout: (Vec2::new(48.0, 32.0), 1, 2, None, None),
-    animation_indices: AnimationIndices { first: 0, last: 1 },
-    frame_rate: 0.4,
-};
-
-const ANGUILLA_RUN: AnimationType = AnimationType {
-    texture: "Anguilla/Anguilla_Run.png",
-    atlas_layout: (Vec2::new(48.0, 32.0), 1, 8, None, None),
-    animation_indices: AnimationIndices { first: 0, last: 7 },
-    frame_rate: 0.1,
-};
-
-const ANGUILLA_JUMP: AnimationType = AnimationType {
-    texture: "Anguilla/Anguilla_Jump.png",
-    atlas_layout: (Vec2::new(48.0, 32.0), 1, 4, None, None),
-    animation_indices: AnimationIndices { first: 0, last: 3 },
-    frame_rate: 0.1,
-};
+#[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
+enum AnguillaDirection {
+    #[default]
+    Right,
+    Left,
+}
 
 #[derive(Component)]
 struct Anguilla;
@@ -146,112 +148,107 @@ fn setup(
                 scale: Vec3::new(2.0, 2.0, 1.0),
                 ..default()
             },
-            texture: asset_server.load(ANGUILLA_NEUTRAL.texture),
+            texture: asset_server.load("Anguilla/Anguilla_Neutral.png"),
             atlas: TextureAtlas {
                 layout: texture_atlas_layouts.add(
-                            TextureAtlasLayout::from_grid(
-                                ANGUILLA_NEUTRAL.atlas_layout.0,
-                                ANGUILLA_NEUTRAL.atlas_layout.1,
-                                ANGUILLA_NEUTRAL.atlas_layout.2,
-                                ANGUILLA_NEUTRAL.atlas_layout.3,
-                                ANGUILLA_NEUTRAL.atlas_layout.4,
-                            )),
-                index: ANGUILLA_NEUTRAL.animation_indices.first,
+                            TextureAtlasLayout::from_grid(Vec2::new(48.0, 32.0), 1, 4, None, None)
+                ),
+                index: 0,
             },
             ..default()
         },
         Anguilla,
         Velocity(Vec2::new(0.0, 0.0)),
         Collider,
-        ANGUILLA_NEUTRAL.animation_indices,
-        AnimationTimer(Timer::from_seconds(ANGUILLA_NEUTRAL.frame_rate, TimerMode::Repeating)),
+        AnimationIndices { first: 0, last: 1 },
+        AnimationTimer(Timer::from_seconds(0.4, TimerMode::Repeating)),
     ));
 }
 
-fn update_animation(
-    mut query: Query<(&Velocity, &mut AnimationIndices, &mut AnimationTimer, &mut Handle<Image>, &mut TextureAtlas, &mut Sprite), With<Anguilla>>,
-    asset_server: Res<AssetServer>,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+fn change_direction(
+    mut query: Query<&mut Sprite, With<Anguilla>>,
+    mut dir_change: EventReader<StateTransitionEvent<AnguillaDirection>>,
+    direction: Res<State<AnguillaDirection>>,
 ) {
-    let (velocity, mut indices, mut animation_timer, mut texture, mut atlas, mut sprite) = query.single_mut();
-
-    if velocity.0.x > 0.0 && velocity.0.y == 0.0 && ((*indices != ANGUILLA_RUN.animation_indices) | (sprite.flip_x != false)) {
-        *texture = asset_server.load(ANGUILLA_RUN.texture);
-        atlas.layout = texture_atlas_layouts.add(
-                        TextureAtlasLayout::from_grid(
-                            ANGUILLA_RUN.atlas_layout.0,
-                            ANGUILLA_RUN.atlas_layout.1,
-                            ANGUILLA_RUN.atlas_layout.2,
-                            ANGUILLA_RUN.atlas_layout.3,
-                            ANGUILLA_RUN.atlas_layout.4,
-                        ));
-        *indices = ANGUILLA_RUN.animation_indices;
-        animation_timer.0 = Timer::from_seconds(ANGUILLA_RUN.frame_rate, TimerMode::Repeating);
-        sprite.flip_x = false;
-    }
-
-    if velocity.0.x < 0.0 && velocity.0.y == 0.0 && ((*indices != ANGUILLA_RUN.animation_indices) | (sprite.flip_x != true)) {
-        *texture = asset_server.load(ANGUILLA_RUN.texture);
-        atlas.layout = texture_atlas_layouts.add(
-                        TextureAtlasLayout::from_grid(
-                            ANGUILLA_RUN.atlas_layout.0,
-                            ANGUILLA_RUN.atlas_layout.1,
-                            ANGUILLA_RUN.atlas_layout.2,
-                            ANGUILLA_RUN.atlas_layout.3,
-                            ANGUILLA_RUN.atlas_layout.4,
-                        ));
-        *indices = ANGUILLA_RUN.animation_indices;
-        animation_timer.0 = Timer::from_seconds(ANGUILLA_RUN.frame_rate, TimerMode::Repeating);
-        sprite.flip_x = true;
-    }
-    
-    if velocity.0.x == 0.0 && velocity.0.y == 0.0 && *indices != ANGUILLA_NEUTRAL.animation_indices {
-        *indices = ANGUILLA_NEUTRAL.animation_indices;
-        atlas.layout = texture_atlas_layouts.add(
-                        TextureAtlasLayout::from_grid(
-                            ANGUILLA_NEUTRAL.atlas_layout.0,
-                            ANGUILLA_NEUTRAL.atlas_layout.1,
-                            ANGUILLA_NEUTRAL.atlas_layout.2,
-                            ANGUILLA_NEUTRAL.atlas_layout.3,
-                            ANGUILLA_NEUTRAL.atlas_layout.4,
-                        ));
-        atlas.index = ANGUILLA_NEUTRAL.animation_indices.first;
-        *texture = asset_server.load(ANGUILLA_NEUTRAL.texture);
-        animation_timer.0 = Timer::from_seconds(ANGUILLA_NEUTRAL.frame_rate, TimerMode::Repeating);
-    }
-
-    if (velocity.0.y != 0.0 && velocity.0.x >= 0.0) && *indices != ANGUILLA_JUMP.animation_indices {
-        *indices = ANGUILLA_JUMP.animation_indices;
-        *texture = asset_server.load(ANGUILLA_JUMP.texture);
-        atlas.layout = texture_atlas_layouts.add(
-                        TextureAtlasLayout::from_grid(
-                            ANGUILLA_JUMP.atlas_layout.0,
-                            ANGUILLA_JUMP.atlas_layout.1,
-                            ANGUILLA_JUMP.atlas_layout.2,
-                            ANGUILLA_JUMP.atlas_layout.3,
-                            ANGUILLA_JUMP.atlas_layout.4,
-                        ));
-        atlas.index = ANGUILLA_JUMP.animation_indices.first;
-        animation_timer.0 = Timer::from_seconds(ANGUILLA_JUMP.frame_rate, TimerMode::Repeating);
-    }
-            
-    if velocity.0.y != 0.0 && velocity.0.x < 0.0 && *indices != ANGUILLA_JUMP.animation_indices {
-        *indices = ANGUILLA_JUMP.animation_indices;
-        atlas.layout = texture_atlas_layouts.add(
-                        TextureAtlasLayout::from_grid(
-                            ANGUILLA_JUMP.atlas_layout.0,
-                            ANGUILLA_JUMP.atlas_layout.1,
-                            ANGUILLA_JUMP.atlas_layout.2,
-                            ANGUILLA_JUMP.atlas_layout.3,
-                            ANGUILLA_JUMP.atlas_layout.4,
-                        ));
-        atlas.index = ANGUILLA_JUMP.animation_indices.first;
-        *texture = asset_server.load(ANGUILLA_JUMP.texture);
-        animation_timer.0 = Timer::from_seconds(ANGUILLA_JUMP.frame_rate, TimerMode::Repeating);
-        sprite.flip_x = true;
+    for change in dir_change.read() {
+        let mut sprite = query.single_mut();
+        sprite.flip_x = match direction.get() {
+            AnguillaDirection::Right => false,
+            AnguillaDirection::Left => true,
+        };
     }
 }
 
+fn animation_jump(
+    mut query: Query<(&mut AnimationIndices, &mut AnimationTimer, &mut Handle<Image>, &mut TextureAtlas), With<Anguilla>>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let (mut indices, mut animation_timer, mut texture, mut atlas) = query.single_mut();
+
+    *indices = AnimationIndices { first: 0, last: 3 };
+    *texture = asset_server.load("Anguilla/Anguilla_Jump.png");
+    atlas.layout = texture_atlas_layouts.add(
+        TextureAtlasLayout::from_grid(Vec2::new(48.0, 32.0), 1, 4, None, None)
+    );
+    atlas.index = 0;
+    animation_timer.0 = Timer::from_seconds(0.1, TimerMode::Repeating);
+}
+
+fn animation_run(
+    mut query: Query<(&mut AnimationIndices, &mut AnimationTimer, &mut Handle<Image>, &mut TextureAtlas), With<Anguilla>>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let (mut indices, mut animation_timer, mut texture, mut atlas) = query.single_mut();
+
+    *indices = AnimationIndices { first: 0, last: 7 };
+    *texture = asset_server.load("Anguilla/Anguilla_Run.png");
+    atlas.layout = texture_atlas_layouts.add(
+        TextureAtlasLayout::from_grid(Vec2::new(48.0, 32.0), 1, 8, None, None)
+    );
+    atlas.index = 0;
+    animation_timer.0 = Timer::from_seconds(0.1, TimerMode::Repeating);
+}
+
+fn animation_neutral(
+    mut query: Query<(&mut AnimationIndices, &mut AnimationTimer, &mut Handle<Image>, &mut TextureAtlas), With<Anguilla>>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let (mut indices, mut animation_timer, mut texture, mut atlas) = query.single_mut();
+    *indices = AnimationIndices { first: 0, last: 1 };
+    *texture = asset_server.load("Anguilla/Anguilla_Neutral.png");
+    atlas.layout = texture_atlas_layouts.add(
+        TextureAtlasLayout::from_grid(Vec2::new(48.0, 32.0), 1, 2, None, None)
+    );
+    atlas.index = 0;
+    *indices = AnimationIndices { first: 0, last: 1 };
+    animation_timer.0 = Timer::from_seconds(0.4, TimerMode::Repeating);
+}
+
+fn update_animation(
+    mut query: Query<&Velocity, With<Anguilla>>,
+    state: Res<State<AnguillaState>>,
+    direction: Res<State<AnguillaDirection>>,
+    mut next_state: ResMut<NextState<AnguillaState>>,
+    mut next_direction: ResMut<NextState<AnguillaDirection>>,
+) {
+    let velocity = query.single_mut();
+    if velocity.0.y != 0.0 && state.get() != &AnguillaState::Jump {
+        next_state.set(AnguillaState::Jump);
+    } else if velocity.0.x != 0.0 && velocity.0.y == 0.0 && state.get() != &AnguillaState::Run {
+        next_state.set(AnguillaState::Run);
+    } else if velocity.0.y == 0.0 && velocity.0.x == 0.0 && state.get() != &AnguillaState::Neutral {
+        next_state.set(AnguillaState::Neutral);
+    }
+
+    if velocity.0.x < 0.0 && direction.get() != &AnguillaDirection::Left {
+        next_direction.set(AnguillaDirection::Left);
+    } else if velocity.0.x > 0.0 && direction.get() != &AnguillaDirection::Right {
+        next_direction.set(AnguillaDirection::Right);
+    }
+}
 
 fn movement_input(
     keyboard_input: Res<ButtonInput<KeyCode>>,
