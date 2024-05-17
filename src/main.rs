@@ -12,10 +12,12 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, (
             animate_sprite, 
-            update_animation, (
+            count_cooldown,
+            (
                 movement_input, 
                 apply_velocity, 
                 check_for_collisions, 
+                update_state,
                 spawn_projectile,
                 change_direction,
             ).chain()
@@ -23,6 +25,7 @@ fn main() {
         .add_systems(OnEnter(AnguillaState::Run), animation_run)
         .add_systems(OnEnter(AnguillaState::Jump), animation_jump)
         .add_systems(OnEnter(AnguillaState::Neutral), animation_neutral)
+        .add_systems(OnEnter(AnguillaState::CleanBubble), animation_clean)
         .run();
 }
 
@@ -35,6 +38,8 @@ struct AnimationIndices {
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
 
+#[derive(Component, Deref, DerefMut, Debug)]
+struct AttackLock(Timer);
 
 #[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
 enum AnguillaState {
@@ -42,6 +47,7 @@ enum AnguillaState {
     Neutral,
     Run,
     Jump,
+    CleanBubble,
 }
 
 #[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -162,6 +168,7 @@ fn setup(
         Collider,
         AnimationIndices { first: 0, last: 1 },
         AnimationTimer(Timer::from_seconds(0.4, TimerMode::Repeating)),
+        AttackLock(Timer::from_seconds(0.0, TimerMode::Once)),
     ));
 }
 
@@ -170,7 +177,7 @@ fn change_direction(
     mut dir_change: EventReader<StateTransitionEvent<AnguillaDirection>>,
     direction: Res<State<AnguillaDirection>>,
 ) {
-    for change in dir_change.read() {
+    for _change in dir_change.read() {
         let mut sprite = query.single_mut();
         sprite.flip_x = match direction.get() {
             AnguillaDirection::Right => false,
@@ -227,46 +234,72 @@ fn animation_neutral(
     animation_timer.0 = Timer::from_seconds(0.4, TimerMode::Repeating);
 }
 
-fn update_animation(
-    mut query: Query<&Velocity, With<Anguilla>>,
+fn animation_clean(
+    mut query: Query<(&mut AnimationIndices, &mut AnimationTimer, &mut Handle<Image>, &mut TextureAtlas), With<Anguilla>>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let (mut indices, mut animation_timer, mut texture, mut atlas) = query.single_mut();
+    *indices = AnimationIndices { first: 0, last: 1 };
+    *texture = asset_server.load("Anguilla/Anguilla_Clean_Projectile.png");
+    atlas.layout = texture_atlas_layouts.add(
+        TextureAtlasLayout::from_grid(Vec2::new(48.0, 32.0), 1, 12, None, None)
+    );
+    atlas.index = 0;
+    *indices = AnimationIndices { first: 0, last: 11 };
+    animation_timer.0 = Timer::from_seconds(0.1, TimerMode::Repeating);
+}
+
+fn update_state(
+    mut query: Query<(&Velocity, &mut AttackLock), With<Anguilla>>,
     state: Res<State<AnguillaState>>,
     direction: Res<State<AnguillaDirection>>,
     mut next_state: ResMut<NextState<AnguillaState>>,
     mut next_direction: ResMut<NextState<AnguillaDirection>>,
+    mut new_proj: EventReader<ProjectileEvent>,
 ) {
-    let velocity = query.single_mut();
-    if velocity.0.y != 0.0 && state.get() != &AnguillaState::Jump {
-        next_state.set(AnguillaState::Jump);
-    } else if velocity.0.x != 0.0 && velocity.0.y == 0.0 && state.get() != &AnguillaState::Run {
-        next_state.set(AnguillaState::Run);
-    } else if velocity.0.y == 0.0 && velocity.0.x == 0.0 && state.get() != &AnguillaState::Neutral {
-        next_state.set(AnguillaState::Neutral);
+    let (velocity, mut timer) = query.single_mut();
+    for _proj in new_proj.read() {
+        next_state.set(AnguillaState::CleanBubble);
+        *timer = AttackLock(Timer::from_seconds(1.2, TimerMode::Once));
     }
+    if timer.finished() {
+        if velocity.0.y != 0.0 && state.get() != &AnguillaState::Jump {
+            next_state.set(AnguillaState::Jump);
+        } else if velocity.0.x != 0.0 && velocity.0.y == 0.0 && state.get() != &AnguillaState::Run {
+            next_state.set(AnguillaState::Run);
+        } else if velocity.0.y == 0.0 && velocity.0.x == 0.0 && state.get() != &AnguillaState::Neutral {
+            next_state.set(AnguillaState::Neutral);
+        }
 
-    if velocity.0.x < 0.0 && direction.get() != &AnguillaDirection::Left {
-        next_direction.set(AnguillaDirection::Left);
-    } else if velocity.0.x > 0.0 && direction.get() != &AnguillaDirection::Right {
-        next_direction.set(AnguillaDirection::Right);
+        if velocity.0.x < 0.0 && direction.get() != &AnguillaDirection::Left {
+            next_direction.set(AnguillaDirection::Left);
+        } else if velocity.0.x > 0.0 && direction.get() != &AnguillaDirection::Right {
+            next_direction.set(AnguillaDirection::Right);
+        }
     }
 }
 
 fn movement_input(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut query: Query<&mut Velocity, With<Anguilla>>,
+    state: Res<State<AnguillaState>>,
     time: Res<Time>,
 ) {
     let mut velocity = query.single_mut();
     let mut velocity_transform = Vec2::new(0.0, 0.0);
+    
+    if state.get() != &AnguillaState::CleanBubble {
+        if keyboard_input.pressed(KeyCode::KeyA) {
+            velocity_transform.x -= 800.0 * time.delta_seconds();
+        }
 
-    if keyboard_input.pressed(KeyCode::KeyA) {
-        velocity_transform.x -= 600.0 * time.delta_seconds();
+        if keyboard_input.pressed(KeyCode::KeyD) {
+            velocity_transform.x += 800.0 * time.delta_seconds();
+        } 
+
+        velocity.0 = (velocity.0 + velocity_transform).clamp(Vec2::new(-1000.0, -10000.0), Vec2::new(1000.0, 10000.0));
     }
-
-    if keyboard_input.pressed(KeyCode::KeyD) {
-        velocity_transform.x += 600.0 * time.delta_seconds();
-    } 
-
-    velocity.0 = (velocity.0 + velocity_transform).clamp(Vec2::new(-1000.0, -10000.0), Vec2::new(1000.0, 10000.0));
 }
 
 
@@ -286,6 +319,7 @@ fn check_for_collisions(
     collider_query: Query<&Transform, With<Collider>>,
     mut collision_events: EventWriter<CollisionEvent>,
     mut projectile_events: EventWriter<ProjectileEvent>,
+    state: Res<State<AnguillaState>>,
     time: Res<Time>,
 ) {
     let (mut anguilla_velocity, anguilla_transform) = anguilla_query.single_mut();
@@ -306,27 +340,29 @@ fn check_for_collisions(
                 Collision::Top => {
                     anguilla_velocity.0.y = 0.0;
 
-                    if keyboard_input.pressed(KeyCode::KeyW) {
-                        anguilla_velocity.0.y += 300.0;
-                    }
+                    if state.get() != &AnguillaState::CleanBubble {
+                        if keyboard_input.pressed(KeyCode::KeyW) {
+                            anguilla_velocity.0.y += 500.0;
+                        }
 
-                    if keyboard_input.pressed(KeyCode::KeyJ) {
-                        anguilla_velocity.0.x = (anguilla_velocity.0.x + 1500.0 * time.delta_seconds()).clamp(-500.0, 0.0);
-                        let origin = anguilla_transform.translation + Vec3::new(32.0, 0.0, 0.0);
-                        projectile_events.send(ProjectileEvent(ProjectileType::Clean, origin));
+                        if keyboard_input.just_pressed(KeyCode::KeyJ) {
+                            anguilla_velocity.0.x = anguilla_velocity.0.x * 0.5 * time.delta_seconds();
+                            let origin = anguilla_transform.translation;
+                            projectile_events.send(ProjectileEvent(ProjectileType::Clean, origin));
+                        }
                     }
 
                     if !keyboard_input.pressed(KeyCode::KeyA) && anguilla_velocity.0.x < 0.0 {
-                        anguilla_velocity.0.x = (anguilla_velocity.0.x + 800.0 * time.delta_seconds()).clamp(-500.0, 0.0);
+                        anguilla_velocity.0.x = (anguilla_velocity.0.x + 1000.0 * time.delta_seconds()).clamp(-500.0, 0.0);
                     }
                     if !keyboard_input.pressed(KeyCode::KeyD) && anguilla_velocity.0.x > 0.0 {
-                        anguilla_velocity.0.x = (anguilla_velocity.0.x - 800.0 * time.delta_seconds()).clamp(0.0, 500.0);
+                        anguilla_velocity.0.x = (anguilla_velocity.0.x - 1000.0 * time.delta_seconds()).clamp(0.0, 500.0);
                     }
                 },
                 _ => {},
             }
         } else {
-            anguilla_velocity.0.y -= 300.0 * time.delta_seconds();
+            anguilla_velocity.0.y -= 500.0 * time.delta_seconds();
         }
     }
 }
@@ -336,12 +372,18 @@ fn spawn_projectile(
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     mut new_proj: EventReader<ProjectileEvent>,
+    direction: Res<State<AnguillaDirection>>,
 ) {
+    let dir = match direction.get() {
+        AnguillaDirection::Right => 1.0,
+        AnguillaDirection::Left => -1.0,
+    };
     for event in new_proj.read() {
+        let translation = event.1 + Vec3::new(dir * 32.0, 0.0, 0.0);
         commands.spawn((
             SpriteSheetBundle {
                 transform: Transform {
-                    translation: event.1,
+                    translation,
                     scale: Vec3::new(2.0, 2.0, 1.0),
                     ..default()
                 },
@@ -360,7 +402,7 @@ fn spawn_projectile(
                 ..default()
             },
             Projectile,
-            Velocity(Vec2::new(500.0, 0.0)),
+            Velocity(Vec2::new(dir * 500.0, 0.0)),
             AnimationIndices { first: 0, last: 7 },
             AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
         ));
@@ -402,5 +444,14 @@ fn animate_sprite(
                 atlas.index + 1
             };
         }
+    }
+}
+
+fn count_cooldown(
+    time: Res<Time>,
+    mut query: Query<&mut AttackLock>,
+) {
+    for mut timer in &mut query {
+        timer.tick(time.delta());
     }
 }
