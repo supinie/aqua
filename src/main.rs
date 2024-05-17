@@ -5,12 +5,14 @@ const FLOOR_COLOUR: Color = Color::rgb(0.8, 0.8, 0.8);
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
+        .add_event::<CollisionEvent>()
+        .add_event::<ProjectileEvent>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (animate_sprite, (movement_input, apply_velocity, check_for_collisions).chain()))
+        .add_systems(Update, (animate_sprite, update_animation, (movement_input, apply_velocity, check_for_collisions, spawn_projectile).chain()))
         .run();
 }
 
-#[derive(Component)]
+#[derive(Component, Eq, PartialEq)]
 struct AnimationIndices {
     first: usize,
     last: usize,
@@ -19,11 +21,50 @@ struct AnimationIndices {
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
 
+struct AnimationType {
+    texture: &'static str,
+    atlas_layout: (Vec2, usize, usize, Option<Vec2>, Option<Vec2>),
+    animation_indices: AnimationIndices,
+    frame_rate: f32,
+}
+
+const ANGUILLA_NEUTRAL: AnimationType = AnimationType {
+    texture: "Anguilla/Anguilla_Neutral.png",
+    atlas_layout: (Vec2::new(48.0, 32.0), 1, 2, None, None),
+    animation_indices: AnimationIndices { first: 0, last: 1 },
+    frame_rate: 0.4,
+};
+
+const ANGUILLA_RUN: AnimationType = AnimationType {
+    texture: "Anguilla/Anguilla_Run.png",
+    atlas_layout: (Vec2::new(48.0, 32.0), 1, 8, None, None),
+    animation_indices: AnimationIndices { first: 0, last: 7 },
+    frame_rate: 0.1,
+};
+
+const ANGUILLA_JUMP: AnimationType = AnimationType {
+    texture: "Anguilla/Anguilla_Jump.png",
+    atlas_layout: (Vec2::new(48.0, 32.0), 1, 4, None, None),
+    animation_indices: AnimationIndices { first: 0, last: 3 },
+    frame_rate: 0.1,
+};
+
 #[derive(Component)]
 struct Anguilla;
 
 #[derive(Component)]
 struct Velocity(Vec2);
+
+#[derive(Component)]
+struct Projectile;
+
+#[derive(PartialEq, Eq, Copy, Clone)]
+enum ProjectileType {
+    Clean,
+}
+
+#[derive(Event)]
+struct ProjectileEvent(ProjectileType, Vec3);
 
 #[derive(Component)]
 struct Collider;
@@ -98,13 +139,6 @@ fn setup(
     commands.spawn(TerrainBundle::new(TerrainType::Floor));
 
     // anguilla
-    let texture = asset_server.load("Anguilla/Anguilla_Neutral.png");
-    let layout = TextureAtlasLayout::from_grid(Vec2::new(48.0, 32.0), 1, 2, None, None);
-    // let texture = asset_server.load("Anguilla/Anguilla_Run.png");
-    // let layout = TextureAtlasLayout::from_grid(Vec2::new(48.0, 32.0), 1, 8, None, None);
-    let texture_atlas_layout = texture_atlas_layouts.add(layout);
-    // let animation_indices = AnimationIndices { first: 1, last: 7 };
-    let animation_indices = AnimationIndices { first: 1, last: 2 };
     commands.spawn((
         SpriteSheetBundle {
             transform: Transform {
@@ -112,20 +146,112 @@ fn setup(
                 scale: Vec3::new(2.0, 2.0, 1.0),
                 ..default()
             },
-            texture,
+            texture: asset_server.load(ANGUILLA_NEUTRAL.texture),
             atlas: TextureAtlas {
-                layout: texture_atlas_layout,
-                index: animation_indices.first,
+                layout: texture_atlas_layouts.add(
+                            TextureAtlasLayout::from_grid(
+                                ANGUILLA_NEUTRAL.atlas_layout.0,
+                                ANGUILLA_NEUTRAL.atlas_layout.1,
+                                ANGUILLA_NEUTRAL.atlas_layout.2,
+                                ANGUILLA_NEUTRAL.atlas_layout.3,
+                                ANGUILLA_NEUTRAL.atlas_layout.4,
+                            )),
+                index: ANGUILLA_NEUTRAL.animation_indices.first,
             },
             ..default()
         },
         Anguilla,
         Velocity(Vec2::new(0.0, 0.0)),
         Collider,
-        animation_indices,
-        AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
+        ANGUILLA_NEUTRAL.animation_indices,
+        AnimationTimer(Timer::from_seconds(ANGUILLA_NEUTRAL.frame_rate, TimerMode::Repeating)),
     ));
 }
+
+fn update_animation(
+    mut query: Query<(&Velocity, &mut AnimationIndices, &mut AnimationTimer, &mut Handle<Image>, &mut TextureAtlas, &mut Sprite), With<Anguilla>>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let (velocity, mut indices, mut animation_timer, mut texture, mut atlas, mut sprite) = query.single_mut();
+
+    if velocity.0.x > 0.0 && velocity.0.y == 0.0 && ((*indices != ANGUILLA_RUN.animation_indices) | (sprite.flip_x != false)) {
+        *texture = asset_server.load(ANGUILLA_RUN.texture);
+        atlas.layout = texture_atlas_layouts.add(
+                        TextureAtlasLayout::from_grid(
+                            ANGUILLA_RUN.atlas_layout.0,
+                            ANGUILLA_RUN.atlas_layout.1,
+                            ANGUILLA_RUN.atlas_layout.2,
+                            ANGUILLA_RUN.atlas_layout.3,
+                            ANGUILLA_RUN.atlas_layout.4,
+                        ));
+        *indices = ANGUILLA_RUN.animation_indices;
+        animation_timer.0 = Timer::from_seconds(ANGUILLA_RUN.frame_rate, TimerMode::Repeating);
+        sprite.flip_x = false;
+    }
+
+    if velocity.0.x < 0.0 && velocity.0.y == 0.0 && ((*indices != ANGUILLA_RUN.animation_indices) | (sprite.flip_x != true)) {
+        *texture = asset_server.load(ANGUILLA_RUN.texture);
+        atlas.layout = texture_atlas_layouts.add(
+                        TextureAtlasLayout::from_grid(
+                            ANGUILLA_RUN.atlas_layout.0,
+                            ANGUILLA_RUN.atlas_layout.1,
+                            ANGUILLA_RUN.atlas_layout.2,
+                            ANGUILLA_RUN.atlas_layout.3,
+                            ANGUILLA_RUN.atlas_layout.4,
+                        ));
+        *indices = ANGUILLA_RUN.animation_indices;
+        animation_timer.0 = Timer::from_seconds(ANGUILLA_RUN.frame_rate, TimerMode::Repeating);
+        sprite.flip_x = true;
+    }
+    
+    if velocity.0.x == 0.0 && velocity.0.y == 0.0 && *indices != ANGUILLA_NEUTRAL.animation_indices {
+        *indices = ANGUILLA_NEUTRAL.animation_indices;
+        atlas.layout = texture_atlas_layouts.add(
+                        TextureAtlasLayout::from_grid(
+                            ANGUILLA_NEUTRAL.atlas_layout.0,
+                            ANGUILLA_NEUTRAL.atlas_layout.1,
+                            ANGUILLA_NEUTRAL.atlas_layout.2,
+                            ANGUILLA_NEUTRAL.atlas_layout.3,
+                            ANGUILLA_NEUTRAL.atlas_layout.4,
+                        ));
+        atlas.index = ANGUILLA_NEUTRAL.animation_indices.first;
+        *texture = asset_server.load(ANGUILLA_NEUTRAL.texture);
+        animation_timer.0 = Timer::from_seconds(ANGUILLA_NEUTRAL.frame_rate, TimerMode::Repeating);
+    }
+
+    if (velocity.0.y != 0.0 && velocity.0.x >= 0.0) && *indices != ANGUILLA_JUMP.animation_indices {
+        *indices = ANGUILLA_JUMP.animation_indices;
+        *texture = asset_server.load(ANGUILLA_JUMP.texture);
+        atlas.layout = texture_atlas_layouts.add(
+                        TextureAtlasLayout::from_grid(
+                            ANGUILLA_JUMP.atlas_layout.0,
+                            ANGUILLA_JUMP.atlas_layout.1,
+                            ANGUILLA_JUMP.atlas_layout.2,
+                            ANGUILLA_JUMP.atlas_layout.3,
+                            ANGUILLA_JUMP.atlas_layout.4,
+                        ));
+        atlas.index = ANGUILLA_JUMP.animation_indices.first;
+        animation_timer.0 = Timer::from_seconds(ANGUILLA_JUMP.frame_rate, TimerMode::Repeating);
+    }
+            
+    if velocity.0.y != 0.0 && velocity.0.x < 0.0 && *indices != ANGUILLA_JUMP.animation_indices {
+        *indices = ANGUILLA_JUMP.animation_indices;
+        atlas.layout = texture_atlas_layouts.add(
+                        TextureAtlasLayout::from_grid(
+                            ANGUILLA_JUMP.atlas_layout.0,
+                            ANGUILLA_JUMP.atlas_layout.1,
+                            ANGUILLA_JUMP.atlas_layout.2,
+                            ANGUILLA_JUMP.atlas_layout.3,
+                            ANGUILLA_JUMP.atlas_layout.4,
+                        ));
+        atlas.index = ANGUILLA_JUMP.animation_indices.first;
+        *texture = asset_server.load(ANGUILLA_JUMP.texture);
+        animation_timer.0 = Timer::from_seconds(ANGUILLA_JUMP.frame_rate, TimerMode::Repeating);
+        sprite.flip_x = true;
+    }
+}
+
 
 fn movement_input(
     keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -161,7 +287,8 @@ fn check_for_collisions(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut anguilla_query: Query<(&mut Velocity, &Transform), With<Anguilla>>,
     collider_query: Query<&Transform, With<Collider>>,
-    // mut collision_events: EventWriter<CollisionEvent>,
+    mut collision_events: EventWriter<CollisionEvent>,
+    mut projectile_events: EventWriter<ProjectileEvent>,
     time: Res<Time>,
 ) {
     let (mut anguilla_velocity, anguilla_transform) = anguilla_query.single_mut();
@@ -176,7 +303,7 @@ fn check_for_collisions(
         );
 
         if let Some(collision) = collision {
-            // collision_events.send_default();
+            collision_events.send_default();
 
             match collision {
                 Collision::Top => {
@@ -184,6 +311,12 @@ fn check_for_collisions(
 
                     if keyboard_input.pressed(KeyCode::KeyW) {
                         anguilla_velocity.0.y += 300.0;
+                    }
+
+                    if keyboard_input.pressed(KeyCode::KeyJ) {
+                        anguilla_velocity.0.x = (anguilla_velocity.0.x + 1500.0 * time.delta_seconds()).clamp(-500.0, 0.0);
+                        let origin = anguilla_transform.translation + Vec3::new(32.0, 0.0, 0.0);
+                        projectile_events.send(ProjectileEvent(ProjectileType::Clean, origin));
                     }
 
                     if !keyboard_input.pressed(KeyCode::KeyA) && anguilla_velocity.0.x < 0.0 {
@@ -198,6 +331,42 @@ fn check_for_collisions(
         } else {
             anguilla_velocity.0.y -= 300.0 * time.delta_seconds();
         }
+    }
+}
+
+fn spawn_projectile(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    mut new_proj: EventReader<ProjectileEvent>,
+) {
+    for event in new_proj.read() {
+        commands.spawn((
+            SpriteSheetBundle {
+                transform: Transform {
+                    translation: event.1,
+                    scale: Vec3::new(2.0, 2.0, 1.0),
+                    ..default()
+                },
+                texture: asset_server.load("Projectiles/Clean_Bubble.png"),
+                atlas: TextureAtlas {
+                    layout: texture_atlas_layouts.add(
+                                TextureAtlasLayout::from_grid(
+                                    Vec2::new(10.0, 10.0),
+                                    1,
+                                    8,
+                                    None,
+                                    None
+                                )),
+                    index: 0,
+                },
+                ..default()
+            },
+            Projectile,
+            Velocity(Vec2::new(500.0, 0.0)),
+            AnimationIndices { first: 0, last: 7 },
+            AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
+        ));
     }
 }
 
